@@ -1,9 +1,13 @@
 import TelegramBot from "node-telegram-bot-api";
 import axios from "axios";
-import FormData from "form-data";
 import QRCode from "qrcode";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import { env } from "../config/env";
 import { logger } from "../utils/logger";
+import { registerUser } from "./user.service";
+import { submitPaymentWithImage } from "./payment.service";
 
 type Step =
   | "AWAIT_START"
@@ -33,10 +37,6 @@ const BACK_LABEL = "⬅️ Back";
 let bot: TelegramBot | null = null;
 
 const userStates = new Map<number, UserState>();
-
-function getBackendUrl(): string {
-  return process.env.BACKEND_URL || `http://localhost:${env.port}`;
-}
 
 function getOrInitState(chatId: number, msg: TelegramBot.Message): UserState {
   const existing = userStates.get(chatId);
@@ -336,18 +336,13 @@ async function handleTextMessage(msg: TelegramBot.Message): Promise<void> {
     const primary = owners[0];
 
     try {
-      const backendUrl = getBackendUrl();
-      await axios.post(
-        `${backendUrl}/api/users/register`,
-        {
-          telegramId: state.telegramId,
-          fullName: primary.name,
-          username: state.username ?? "",
-          phoneNumber: primary.phone,
-          ticketCount: state.ticketCount ?? 1
-        },
-        { timeout: 10_000 }
-      );
+      await registerUser({
+        telegramId: state.telegramId,
+        fullName: primary.name,
+        username: state.username ?? "",
+        phoneNumber: primary.phone,
+        ticketCount: state.ticketCount ?? 1
+      });
     } catch (err) {
       logger.error("Error registering user from Telegram bot", { err });
       await bot.sendMessage(
@@ -408,6 +403,8 @@ async function handlePhotoMessage(msg: TelegramBot.Message): Promise<void> {
 
   const largestPhoto = photos[photos.length - 1];
 
+  let imagePath: string | null = null;
+
   try {
     const fileLink = await bot.getFileLink(largestPhoto.file_id);
     const imageResp = await axios.get<ArrayBuffer>(fileLink, {
@@ -415,33 +412,24 @@ async function handlePhotoMessage(msg: TelegramBot.Message): Promise<void> {
       timeout: 30_000
     });
 
-    const form = new FormData();
-    form.append("file", Buffer.from(imageResp.data), {
-      filename: "payment.jpg",
-      contentType: "image/jpeg"
+    const buffer = Buffer.from(imageResp.data);
+    const tmpDir = path.join(os.tmpdir(), "mmd-bot");
+    await fs.promises.mkdir(tmpDir, { recursive: true });
+    imagePath = path.join(tmpDir, `${state.telegramId}-${Date.now()}.jpg`);
+    await fs.promises.writeFile(imagePath, buffer);
+
+    const result = await submitPaymentWithImage({
+      telegramId: state.telegramId,
+      owners: state.owners ?? [],
+      imagePath
     });
-    form.append("telegramId", state.telegramId);
-    form.append("owners", JSON.stringify(state.owners ?? []));
-
-    const backendUrl = getBackendUrl();
-
-    const resp = await axios.post(`${backendUrl}/api/payments/submit`, form, {
-      headers: form.getHeaders(),
-      timeout: 30_000
-    });
-
-    const result = resp.data as {
-      verified?: boolean;
-      ticketCount?: number;
-      tickets?: { ownerName: string; ownerPhone: string; qrPayload: string }[];
-      amount?: string;
-      reference?: string;
-      message?: string;
-    };
 
     if (result.verified) {
       const tickets = result.tickets ?? [];
-      const ticketCount = result.ticketCount === undefined ? tickets.length : 1;
+      const ticketCount =
+        result.ticketCount !== undefined && result.ticketCount > 0
+          ? result.ticketCount
+          : tickets.length || 1;
 
       await bot.sendMessage(
         chatId,
@@ -514,6 +502,14 @@ async function handlePhotoMessage(msg: TelegramBot.Message): Promise<void> {
       }
     );
     await showStart(chatId);
+  } finally {
+    if (imagePath) {
+      try {
+        await fs.promises.unlink(imagePath);
+      } catch {
+        // ignore cleanup errors
+      }
+    }
   }
 }
 
