@@ -100,7 +100,7 @@ export async function submitPayment(
       const matches =
         Boolean(received) &&
         (received === expected || received.includes(expected) || expected.includes(received) || received === env.recipientNumber);
-        console.log("matches" + matches)
+      console.log("matches" + matches)
       if (!matches) {
         failureReasons.push("Payment was not sent to the correct recipient.");
       }
@@ -210,6 +210,7 @@ export async function submitPayment(
       amount: verification.amount
     });
   } catch (err) {
+    console.log("error from backend", err);
     if (file && fs.existsSync(file.path)) {
       fs.unlink(file.path, () => undefined);
     }
