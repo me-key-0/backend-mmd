@@ -10,19 +10,20 @@ import { errorHandler } from "./middlewares/errorHandler";
 const app = express();
 
 app.use(helmet());
-app.use(
-  cors({
-    origin: env.allowedOrigins,
-    credentials: true
-  })
-);
+// app.use(
+//   cors({
+//     origin: env.allowedOrigins,
+//     credentials: true
+//   })
+// );
+app.use(cors());
 app.use(express.json());
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
 });
 
 app.use(limiter);
@@ -37,4 +38,3 @@ app.use("/api/admin", adminRouter);
 app.use(errorHandler);
 
 export { app };
-
